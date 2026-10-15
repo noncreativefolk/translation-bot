@@ -6,6 +6,7 @@ so no text is sent to any server. Hosted as static files on Cloudflare: https://
 
 - Model: EXAONE 3.5 2.4B Instruct, Q4_K_M (~1.6 GB), downloaded once from Hugging Face and cached in the browser (OPFS).
 - Best in Chrome/Edge (WebGPU). Other browsers fall back to CPU (slower).
+- Image → copy: upload / paste / drop banner images; Qwen3-VL 2B (Q8_0 + mmproj, ~2.3 GB, Apache-2.0) reads the text in-browser, user edits, then EXAONE translates. Images are downscaled to 0.6 MP (larger exhausts browser GPU memory).
 - Optional "Local server" engine talks to `llama-server` on `localhost:8080` (see `offline/`).
 
 ## Layout

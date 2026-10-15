@@ -60,9 +60,14 @@
   .bar > div { height: 100%; background: var(--accent); width: 0%; transition: width .2s; }
   code.kbd { background: var(--panel2); padding: 1px 6px; border-radius: 4px; border: 1px solid var(--line); font-size: 12px; }
   a { color: var(--accent); }
+  .msg.user.img { padding: 6px; background: var(--panel2); border: 1px solid var(--line); }
+  .msg.user.img img { display: block; max-width: 360px; max-height: 260px; border-radius: 6px; }
+  .msg textarea.extract { margin-top: 4px; min-height: 90px; background: var(--bg); color: var(--text); white-space: pre-wrap; }
+  #dropHint { position: fixed; inset: 0; background: rgba(109,124,255,.18); border: 3px dashed var(--accent); display: none; align-items: center; justify-content: center; font-size: 22px; font-weight: 600; z-index: 10; pointer-events: none; }
 </style>
 </head>
 <body>
+<div id="dropHint">Drop banner images to extract their copy</div>
 <header>
   <span class="dot" id="statusDot" title="server status"></span>
   <div>
@@ -91,6 +96,11 @@
         </div>
         <div class="bar hidden" id="dlBarWrap" style="margin-top:6px"><div id="dlBar"></div></div>
         <p class="hint" id="engineHint" style="margin-top:6px"></p>
+      </div>
+      <div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px">
+        <p class="hint">Image text reader: Qwen3-VL 2B (~2.3 GB, Apache-2.0). Downloads the first time you add an image, then cached. Always runs in this browser.</p>
+        <p class="hint" id="visionHint" style="margin-top:4px"></p>
+        <div class="bar hidden" id="vBarWrap" style="margin-top:6px"><div id="vBar"></div></div>
       </div>
       <div id="serverEngine" class="hidden" style="margin-top:10px">
         <p class="hint">Uses llama-server on your machine (faster, supports the 7.8B model). Set the address in Settings.</p>
@@ -161,7 +171,9 @@
     <div id="history"></div>
     <div id="progress"><span id="progLabel"></span><div class="bar"><div id="progBar"></div></div><span id="progCount"></span></div>
     <div class="inputbar">
-      <textarea id="input" placeholder="Type or paste text to translate…  (Ctrl+Enter to send)"></textarea>
+      <button class="btn" id="btnImage" title="Extract copy from banner / image files (runs on this device)">Image</button>
+      <input type="file" id="imageFile" accept="image/*" multiple class="hidden">
+      <textarea id="input" placeholder="Type or paste text to translate…  (Ctrl+Enter to send) · paste or drop a banner image to extract its copy"></textarea>
       <button class="btn primary" id="send">Translate</button>
     </div>
   </div>
@@ -269,9 +281,11 @@ async function loadBrowserModel() {
 }
 
 async function clearModelCache() {
-  if (!confirm("Delete the cached model (~1.6 GB) from this browser? It will re-download next time.")) return;
+  if (!confirm("Delete the cached models (translator ~1.6 GB + image reader ~2.3 GB) from this browser? They re-download next time.")) return;
   try { if (wllama) await wllama.exit(); } catch (_) {}
-  wllama = null;
+  try { if (vision) await vision.exit(); } catch (_) {}
+  wllama = null; vision = null;
+  $("visionHint").textContent = "";
   await newWllama().cacheManager.clear();
   $("loadModel").disabled = false; $("loadModel").textContent = "Download & load model";
   $("clearModel").classList.add("hidden");
@@ -444,13 +458,13 @@ function addCopyBtn(shell, getText) {
 }
 
 /* ---------------- send flow ---------------- */
-async function doSend() {
+async function doSend(textOverride) {
   const ta = $("input");
-  const text = ta.value.trim();
+  const text = (typeof textOverride === "string" ? textOverride : ta.value).trim();
   if (!text || busy) return;
   busy = true; $("send").disabled = true;
   addUser(text);
-  ta.value = "";
+  if (typeof textOverride !== "string") ta.value = "";
   const notReady = await ensureReady();
   if (notReady) {
     const e = addBotShell("error");
@@ -612,10 +626,157 @@ $("saveSettings").onclick = () => {
   checkServer();
 };
 $("checkNow").onclick = checkServer;
-$("send").onclick = doSend;
+$("send").onclick = () => doSend();
 $("input").addEventListener("keydown", (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === "Enter") doSend();
 });
+/* ---------------- image → copy extraction (Qwen3-VL 2B, in browser) ---------------- */
+const VISION = {
+  url: "https://huggingface.co/ggml-org/Qwen3-VL-2B-Instruct-GGUF/resolve/main/Qwen3-VL-2B-Instruct-Q8_0.gguf",
+  mmprojUrl: "https://huggingface.co/ggml-org/Qwen3-VL-2B-Instruct-GGUF/resolve/main/mmproj-Qwen3-VL-2B-Instruct-Q8_0.gguf",
+  maxMP: 0.6,  // megapixels sent to the model; larger images exhaust browser GPU memory
+  prompt: "Extract all text in this image exactly as written, line by line, top to bottom. " +
+          "Keep the original language and spelling, including numbers, symbols and currency signs. Output only the text.",
+};
+let vision = null, visionLoading = null;
+const imageQueue = [];
+let imageRunning = false;
+
+async function loadVision() {
+  if (vision && vision.isModelLoaded()) return;
+  if (visionLoading) return visionLoading;
+  visionLoading = (async () => {
+    const hint = $("visionHint"), wrap = $("vBarWrap"), bar = $("vBar");
+    const w = newWllama();
+    wrap.classList.remove("hidden");
+    hint.textContent = "Loading image reader…";
+    try {
+      await w.loadModelFromUrl({ url: VISION.url, mmprojUrl: VISION.mmprojUrl }, {
+        n_ctx: 4096,
+        n_gpu_layers: w.isSupportWebGPU() ? 999 : 0,
+        progressCallback: ({ loaded, total }) => {
+          bar.style.width = Math.round((total ? loaded / total : 0) * 100) + "%";
+          hint.textContent = "Downloading image reader " + fmtGB(loaded) + " / " + fmtGB(total || loaded) + " (one-time)";
+        },
+      });
+      vision = w;
+      hint.textContent = "Image reader ready · cached for next time";
+    } catch (e) {
+      try { await w.exit(); } catch (_) {}
+      hint.textContent = "Image reader failed to load: " + (e && e.message ? e.message : e);
+      throw e;
+    } finally {
+      wrap.classList.add("hidden");
+      visionLoading = null;
+    }
+  })();
+  return visionLoading;
+}
+
+/** Downscale to VISION.maxMP and re-encode as PNG (also normalises webp/gif/etc). */
+async function prepareImage(file) {
+  const bmp = await createImageBitmap(file);
+  const k = Math.min(1, Math.sqrt(VISION.maxMP * 1e6 / (bmp.width * bmp.height)));
+  const c = document.createElement("canvas");
+  c.width = Math.max(1, Math.round(bmp.width * k)); c.height = Math.max(1, Math.round(bmp.height * k));
+  const g = c.getContext("2d");
+  g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height);   // flatten transparency
+  g.drawImage(bmp, 0, 0, c.width, c.height);
+  bmp.close && bmp.close();
+  const blob = await new Promise((res) => c.toBlob(res, "image/png"));
+  return blob.arrayBuffer();
+}
+
+function addImageMsg(file) {
+  const d = addMsg("user img");
+  const im = document.createElement("img");
+  im.src = URL.createObjectURL(file); im.alt = file.name || "image";
+  d.appendChild(im);
+}
+
+async function extractImage(file) {
+  addImageMsg(file);
+  const sh = addBotShell("COPY FROM IMAGE — " + (file.name || "pasted image"));
+  sh.body.textContent = "Reading text… (runs on this device)";
+  try {
+    await loadVision();
+    const data = await prepareImage(file);
+    const t0 = performance.now();
+    let full = "";
+    sh.body.textContent = "";
+    const stream = await vision.createChatCompletion({
+      messages: [{ role: "user", content: [{ type: "image", data }, { type: "text", text: VISION.prompt }] }],
+      temperature: 0, max_tokens: 1024, stream: true,
+    });
+    for await (const chunk of stream) {
+      const d = chunk.choices && chunk.choices[0] && chunk.choices[0].delta ? chunk.choices[0].delta.content : "";
+      if (d) { full += d; sh.body.textContent = full; history_.scrollTop = history_.scrollHeight; }
+    }
+    full = full.trim();
+    sh.body.textContent = "";
+    if (!full) { sh.body.textContent = "No text found in this image."; return; }
+    const ta = document.createElement("textarea");
+    ta.className = "extract"; ta.value = full; ta.rows = Math.min(14, full.split("\n").length + 1);
+    ta.title = "Fix any misread words before translating";
+    sh.body.appendChild(ta);
+    const note = document.createElement("div");
+    note.className = "hint"; note.style.marginTop = "4px";
+    note.textContent = "Extracted in " + ((performance.now() - t0) / 1000).toFixed(1) + "s · check and edit, then translate. Image never left this device.";
+    sh.body.appendChild(note);
+    const a = document.createElement("div"); a.className = "actions";
+    const bT = document.createElement("button"); bT.className = "btn small primary"; bT.textContent = "Translate this";
+    bT.onclick = async () => {
+      if (busy) return;
+      const dir = /[가-힣]/.test(ta.value) ? "ko2en" : "en2ko";   // auto-pick direction from the copy
+      if (dir !== direction) $("dirSeg").querySelector('[data-dir="' + dir + '"]').click();
+      await doSend(ta.value);
+    };
+    const bL = document.createElement("button"); bL.className = "btn small"; bL.textContent = "Translate line by line";
+    bL.title = "Translate each line separately (keeps banner structure: headline / sub-copy / button)";
+    bL.onclick = () => {
+      $("batchText").value = ta.value; $("batchFile").value = "";
+      $("batchPanel").classList.remove("hidden");
+      const dir = /[가-힣]/.test(ta.value) ? "ko2en" : "en2ko";
+      if (dir !== direction) $("dirSeg").querySelector('[data-dir="' + dir + '"]').click();
+      runBatch();
+    };
+    a.appendChild(bT); a.appendChild(bL); sh.root.appendChild(a);
+    addCopyBtn(sh, () => ta.value);
+  } catch (e) {
+    sh.root.classList.add("error");
+    sh.body.textContent = "Could not read this image: " + (e && e.message ? e.message : e);
+  }
+}
+
+function queueImages(files) {
+  for (const f of files) if (f && f.type && f.type.startsWith("image/")) imageQueue.push(f);
+  if (imageRunning) return;
+  imageRunning = true;
+  (async () => {
+    while (imageQueue.length) await extractImage(imageQueue.shift());
+    imageRunning = false;
+  })();
+}
+
+$("btnImage").onclick = () => $("imageFile").click();
+$("imageFile").onchange = (e) => { queueImages([...e.target.files]); e.target.value = ""; };
+document.addEventListener("paste", (e) => {
+  const files = [...(e.clipboardData ? e.clipboardData.files : [])].filter(f => f.type.startsWith("image/"));
+  if (files.length) { e.preventDefault(); queueImages(files); }
+});
+let dragDepth = 0;
+const hasFiles = (e) => e.dataTransfer && [...e.dataTransfer.types].includes("Files");
+document.addEventListener("dragenter", (e) => { if (hasFiles(e)) { dragDepth++; $("dropHint").style.display = "flex"; } });
+document.addEventListener("dragleave", () => { if (--dragDepth <= 0) { dragDepth = 0; $("dropHint").style.display = "none"; } });
+document.addEventListener("dragover", (e) => { if (hasFiles(e)) e.preventDefault(); });
+document.addEventListener("drop", (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault(); dragDepth = 0; $("dropHint").style.display = "none";
+  const imgs = [...e.dataTransfer.files].filter(f => f.type.startsWith("image/"));
+  if (imgs.length) queueImages(imgs);
+  else if (e.dataTransfer.files.length) { $("batchPanel").classList.remove("hidden"); }
+});
+
 /* ---------------- engine switch ---------------- */
 function applyEngine() {
   for (const b of $("engineSeg").children) b.className = b.dataset.engine === engine ? "on" : "";
