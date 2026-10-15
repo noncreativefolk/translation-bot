@@ -49,6 +49,74 @@ function newWllama() {
   });
 }
 
+/* ---------------- storage-aware model loading ----------------
+ * Normally models are cached in the browser (OPFS) so they download once.
+ * Incognito/private windows and low-disk browsers have a tiny storage quota, so
+ * caching fails with QuotaExceededError. In that case we stream the model
+ * straight into memory instead (works, but re-downloads every visit). */
+let storageWarned = false;
+async function canCache(bytesNeeded) {
+  try {
+    if (navigator.storage && navigator.storage.persist) await navigator.storage.persist().catch(() => {});
+    const est = navigator.storage && navigator.storage.estimate ? await navigator.storage.estimate() : null;
+    if (!est || !est.quota) return true;
+    return (est.quota - (est.usage || 0)) > bytesNeeded * 1.15;
+  } catch (_) { return true; }
+}
+function isQuotaError(e) {
+  const s = String((e && (e.name + " " + e.message)) || e);
+  return /quota|QuotaExceeded|storage/i.test(s);
+}
+/** Download into memory (used only when the browser can't cache). One retry on network failure. */
+async function fetchToBlob(url, onBytes) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const r = await fetch(url, { mode: "cors", credentials: "omit" });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const total = +r.headers.get("content-length") || 0;
+      let loaded = 0;
+      const counted = r.body.pipeThrough(new TransformStream({ transform(c, ctl) { loaded += c.byteLength; onBytes(loaded, total); ctl.enqueue(c); } }));
+      return { blob: await new Response(counted).blob(), total };
+    } catch (e) {
+      if (attempt >= 1) throw new Error("Download failed (" + (e && e.message ? e.message : e) + "). This window has limited storage — open the tool in a normal (non-Incognito) Chrome window.");
+      await new Promise((res) => setTimeout(res, 2000));
+    }
+  }
+}
+function warnNoCache() {
+  if (storageWarned) return;
+  storageWarned = true;
+  const msg = "This browser window can't save the models (private/Incognito window or low disk space).\n\nThe translator will still load into memory (re-downloads each visit). The image reader (2.3 GB) usually can't load here.\n\nFor one-time downloads and image reading, open this page in a normal Chrome window.";
+  for (const id of ["engineHint", "visionHint"]) { const el = $(id); if (el && !el.textContent.startsWith("Ready")) el.dataset.nocache = "1"; }
+  setTimeout(() => alert(msg), 0);
+}
+/** urls: [model] or [model, mmproj]; sizeHint in bytes; onProgress(loaded,total) */
+async function loadModelSmart(w, urls, sizeHint, params, onProgress) {
+  const cacheOk = await canCache(sizeHint);
+  if (cacheOk) {
+    try {
+      const src = urls.length > 1 ? { url: urls[0], mmprojUrl: urls[1] } : urls[0];
+      await w.loadModelFromUrl(src, { ...params, progressCallback: ({ loaded, total }) => onProgress(loaded, total) });
+      return { cached: true };
+    } catch (e) {
+      if (!isQuotaError(e)) throw e;
+      for (const u of urls) { try { await w.cacheManager.delete(u); } catch (_) {} }   // drop partial file
+      try { await w.exit(); } catch (_) {}
+      w = null;
+    }
+  }
+  // In-memory fallback (no persistent cache).
+  warnNoCache();
+  const w2 = w || newWllama();
+  const done = new Array(urls.length).fill(0), totals = new Array(urls.length).fill(0);
+  const blobs = await Promise.all(urls.map((u, i) => fetchToBlob(u, (l, t) => {
+    done[i] = l; totals[i] = t;
+    onProgress(done.reduce((a, b) => a + b, 0), totals.reduce((a, b) => a + b, 0) || sizeHint);
+  }).then((x) => x.blob)));
+  await w2.loadModel(blobs, params);
+  return { cached: false, instance: w2 };
+}
+
 async function isModelCached() {
   try {
     const w = newWllama();
@@ -65,22 +133,19 @@ async function loadBrowserModel() {
     btn.disabled = true;
     wrap.classList.remove("hidden");
     setStatus("", "loading model…");
-    const w = newWllama();
+    let w = newWllama();
     const gpu = w.isSupportWebGPU();
     try {
-      await w.loadModelFromUrl(MODEL.url, {
-        n_ctx: N_CTX,
-        n_gpu_layers: gpu ? 999 : 0,
-        progressCallback: ({ loaded, total }) => {
-          const f = total ? loaded / total : 0;
-          bar.style.width = Math.round(f * 100) + "%";
-          hint.textContent = "Downloading " + fmtGB(loaded) + " / " + fmtGB(total || loaded) + " (one-time)";
-        },
+      const res = await loadModelSmart(w, [MODEL.url], 1.65e9, { n_ctx: N_CTX, n_gpu_layers: gpu ? 999 : 0 }, (loaded, total) => {
+        const f = total ? loaded / total : 0;
+        bar.style.width = Math.round(f * 100) + "%";
+        hint.textContent = "Downloading " + fmtGB(loaded) + " / " + fmtGB(total || loaded) + (storageWarned ? " (not cached in this window)" : " (one-time)");
       });
+      if (res.instance) w = res.instance;
       wllama = w;
       bar.style.width = "100%";
       const mt = w.isMultithread() ? w.getNumThreads() + " threads" : "single thread";
-      hint.textContent = "Ready · " + (gpu ? "WebGPU" : "CPU (" + mt + ")") + " · cached for next time";
+      hint.textContent = "Ready · " + (gpu ? "WebGPU" : "CPU (" + mt + ")") + (res.cached ? " · cached for next time" : " · not cached (private window / low storage)");
       btn.textContent = "Model loaded";
       $("clearModel").classList.remove("hidden");
       setTimeout(() => wrap.classList.add("hidden"), 800);
@@ -466,20 +531,17 @@ async function loadVision() {
   if (visionLoading) return visionLoading;
   visionLoading = (async () => {
     const hint = $("visionHint"), wrap = $("vBarWrap"), bar = $("vBar");
-    const w = newWllama();
+    let w = newWllama();
     wrap.classList.remove("hidden");
     hint.textContent = "Loading image reader…";
     try {
-      await w.loadModelFromUrl({ url: VISION.url, mmprojUrl: VISION.mmprojUrl }, {
-        n_ctx: 4096,
-        n_gpu_layers: w.isSupportWebGPU() ? 999 : 0,
-        progressCallback: ({ loaded, total }) => {
-          bar.style.width = Math.round((total ? loaded / total : 0) * 100) + "%";
-          hint.textContent = "Downloading image reader " + fmtGB(loaded) + " / " + fmtGB(total || loaded) + " (one-time)";
-        },
+      const res = await loadModelSmart(w, [VISION.url, VISION.mmprojUrl], 2.3e9, { n_ctx: 4096, n_gpu_layers: w.isSupportWebGPU() ? 999 : 0 }, (loaded, total) => {
+        bar.style.width = Math.round((total ? loaded / total : 0) * 100) + "%";
+        hint.textContent = "Downloading image reader " + fmtGB(loaded) + " / " + fmtGB(total || loaded) + (storageWarned ? " (not cached in this window)" : " (one-time)");
       });
+      if (res.instance) w = res.instance;
       vision = w;
-      hint.textContent = "Image reader ready · cached for next time";
+      hint.textContent = "Image reader ready" + (res.cached ? " · cached for next time" : " · not cached (private window / low storage)");
     } catch (e) {
       try { await w.exit(); } catch (_) {}
       hint.textContent = "Image reader failed to load: " + (e && e.message ? e.message : e);
@@ -621,6 +683,20 @@ renderGlossary();
 applyEngine();
 setInterval(() => { if (engine === "server") checkServer(); }, 30000);
 
+/* Warn up front when this window can't hold the models (Incognito / private / low disk). */
+(async () => {
+  try {
+    const est = navigator.storage && navigator.storage.estimate ? await navigator.storage.estimate() : null;
+    const free = est && est.quota ? est.quota - (est.usage || 0) : Infinity;
+    if (free < 4.5e9) {
+      const d = document.createElement("div");
+      d.className = "hint";
+      d.style.cssText = "background:#3a2a10;border:1px solid #7a5a20;color:#ffd58a;padding:8px 10px;border-radius:8px;margin-bottom:10px";
+      d.textContent = "This looks like a private/Incognito window or a browser with little free storage. Models can't be saved here: the translator re-downloads every visit and the image reader may not load. Open this page in a normal Chrome window for one-time downloads.";
+      $("modelCard").prepend(d);
+    }
+  } catch (_) {}
+})();
 /* Auto-load the model on startup if it is already cached (no network download needed). */
 isModelCached().then((cached) => {
   if (cached) {
