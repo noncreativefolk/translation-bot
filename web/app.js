@@ -1,10 +1,11 @@
 import { Wllama, LoggerWithoutDebug } from "./vendor/wllama/index.js";
 
 /* ---------------- in-browser model config ---------------- */
+// IQ3_M imatrix quant (bartowski): 1.29 GB vs 1.64 GB Q4_K_M, same translation quality in our KO/EN benchmark.
 const MODEL = {
-  repo: "LGAI-EXAONE/EXAONE-3.5-2.4B-Instruct-GGUF",
-  file: "EXAONE-3.5-2.4B-Instruct-Q4_K_M.gguf",
-  label: "EXAONE 3.5 2.4B Q4_K_M",
+  repo: "bartowski/EXAONE-3.5-2.4B-Instruct-GGUF",
+  file: "EXAONE-3.5-2.4B-Instruct-IQ3_M.gguf",
+  label: "EXAONE 3.5 2.4B IQ3_M",
 };
 MODEL.url = "https://huggingface.co/" + MODEL.repo + "/resolve/main/" + MODEL.file;
 const N_CTX = 4096;
@@ -86,7 +87,7 @@ async function fetchToBlob(url, onBytes) {
 function warnNoCache() {
   if (storageWarned) return;
   storageWarned = true;
-  const msg = "This browser window can't save the models (private/Incognito window or low disk space).\n\nThe translator will still load into memory (re-downloads each visit). The image reader (2.3 GB) usually can't load here.\n\nFor one-time downloads and image reading, open this page in a normal Chrome window.";
+  const msg = "This browser window can't save the models (private/Incognito window or low disk space).\n\nThe translator will still load into memory (re-downloads each visit). The image reader (1.6 GB) may not can't load here.\n\nFor one-time downloads and image reading, open this page in a normal Chrome window.";
   for (const id of ["engineHint", "visionHint"]) { const el = $(id); if (el && !el.textContent.startsWith("Ready")) el.dataset.nocache = "1"; }
   setTimeout(() => alert(msg), 0);
 }
@@ -136,7 +137,7 @@ async function loadBrowserModel() {
     let w = newWllama();
     const gpu = w.isSupportWebGPU();
     try {
-      const res = await loadModelSmart(w, [MODEL.url], 1.65e9, { n_ctx: N_CTX, n_gpu_layers: gpu ? 999 : 0 }, (loaded, total) => {
+      const res = await loadModelSmart(w, [MODEL.url], 1.3e9, { n_ctx: N_CTX, n_gpu_layers: gpu ? 999 : 0 }, (loaded, total) => {
         const f = total ? loaded / total : 0;
         bar.style.width = Math.round(f * 100) + "%";
         hint.textContent = "Downloading " + fmtGB(loaded) + " / " + fmtGB(total || loaded) + (storageWarned ? " (not cached in this window)" : " (one-time)");
@@ -165,7 +166,7 @@ async function loadBrowserModel() {
 }
 
 async function clearModelCache() {
-  if (!confirm("Delete the cached models (translator ~1.6 GB + image reader ~2.3 GB) from this browser? They re-download next time.")) return;
+  if (!confirm("Delete the cached models (translator ~1.3 GB + image reader ~1.6 GB) from this browser? They re-download next time.")) return;
   try { if (wllama) await wllama.exit(); } catch (_) {}
   try { if (vision) await vision.exit(); } catch (_) {}
   wllama = null; vision = null;
@@ -516,8 +517,9 @@ $("input").addEventListener("keydown", (e) => {
 });
 /* ---------------- image → copy extraction (Qwen3-VL 2B, in browser) ---------------- */
 const VISION = {
-  url: "https://huggingface.co/ggml-org/Qwen3-VL-2B-Instruct-GGUF/resolve/main/Qwen3-VL-2B-Instruct-Q8_0.gguf",
-  mmprojUrl: "https://huggingface.co/ggml-org/Qwen3-VL-2B-Instruct-GGUF/resolve/main/mmproj-Qwen3-VL-2B-Instruct-Q8_0.gguf",
+  // Official Qwen Q4_K_M (1.11 GB) + Q8_0 vision projector (0.45 GB) = 1.56 GB vs 2.28 GB Q8_0; 0 errors on our banner tests.
+  url: "https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct-GGUF/resolve/main/Qwen3VL-2B-Instruct-Q4_K_M.gguf",
+  mmprojUrl: "https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct-GGUF/resolve/main/mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf",
   maxMP: 0.6,  // megapixels sent to the model; larger images exhaust browser GPU memory
   prompt: "Extract all text in this image exactly as written, line by line, top to bottom. " +
           "Keep the original language and spelling, including numbers, symbols and currency signs. Output only the text.",
@@ -535,7 +537,7 @@ async function loadVision() {
     wrap.classList.remove("hidden");
     hint.textContent = "Loading image reader…";
     try {
-      const res = await loadModelSmart(w, [VISION.url, VISION.mmprojUrl], 2.3e9, { n_ctx: 4096, n_gpu_layers: w.isSupportWebGPU() ? 999 : 0 }, (loaded, total) => {
+      const res = await loadModelSmart(w, [VISION.url, VISION.mmprojUrl], 1.56e9, { n_ctx: 4096, n_gpu_layers: w.isSupportWebGPU() ? 999 : 0 }, (loaded, total) => {
         bar.style.width = Math.round((total ? loaded / total : 0) * 100) + "%";
         hint.textContent = "Downloading image reader " + fmtGB(loaded) + " / " + fmtGB(total || loaded) + (storageWarned ? " (not cached in this window)" : " (one-time)");
       });
@@ -683,12 +685,24 @@ renderGlossary();
 applyEngine();
 setInterval(() => { if (engine === "server") checkServer(); }, 30000);
 
+/* Remove cached files from older model versions (e.g. previous larger quants) to free storage. */
+(async () => {
+  try {
+    const keep = new Set([MODEL.url, VISION.url, VISION.mmprojUrl]);
+    const cm = newWllama().cacheManager;
+    for (const e of await cm.list()) {
+      const u = e.metadata && e.metadata.originalURL;
+      if (u && !keep.has(u)) await cm.delete(e.name);
+    }
+  } catch (_) {}
+})();
+
 /* Warn up front when this window can't hold the models (Incognito / private / low disk). */
 (async () => {
   try {
     const est = navigator.storage && navigator.storage.estimate ? await navigator.storage.estimate() : null;
     const free = est && est.quota ? est.quota - (est.usage || 0) : Infinity;
-    if (free < 4.5e9) {
+    if (free < 3.3e9) {
       const d = document.createElement("div");
       d.className = "hint";
       d.style.cssText = "background:#3a2a10;border:1px solid #7a5a20;color:#ffd58a;padding:8px 10px;border-radius:8px;margin-bottom:10px";

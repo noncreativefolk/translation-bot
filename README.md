@@ -4,9 +4,9 @@ Private Korean ↔ English translation tool. The model runs **inside the user's 
 (llama.cpp compiled to WebAssembly/WebGPU via [wllama](https://github.com/ngxson/wllama)),
 so no text is sent to any server. Live: https://translation-bot.translation-bot.workers.dev
 
-- Model: EXAONE 3.5 2.4B Instruct, Q4_K_M (~1.6 GB), downloaded once from Hugging Face and cached in the browser (OPFS).
+- Model: EXAONE 3.5 2.4B Instruct, IQ3_M imatrix quant (~1.3 GB, bartowski), downloaded once from Hugging Face and cached in the browser (OPFS).
 - Best in Chrome/Edge (WebGPU). Other browsers fall back to CPU (slower).
-- Image → copy: upload / paste / drop banner images; Qwen3-VL 2B (Q8_0 + mmproj, ~2.3 GB, Apache-2.0) reads the text in-browser, user edits, then EXAONE translates. Images are downscaled to 0.6 MP (larger exhausts browser GPU memory).
+- Image → copy: upload / paste / drop banner images; Qwen3-VL 2B (official Q4_K_M + Q8_0 mmproj, ~1.6 GB, Apache-2.0) reads the text in-browser, user edits, then EXAONE translates. Images are downscaled to 0.6 MP (larger exhausts browser GPU memory).
 - Optional "Local server" engine talks to `llama-server` on `localhost:8080` (see `offline/`).
 
 ## Protection against scrapers / AI agents / reverse engineering
