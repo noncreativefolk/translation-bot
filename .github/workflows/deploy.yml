@@ -18,7 +18,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Fetch pinned vendor assets (wllama + coi-serviceworker)
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install build tools
+        run: npm ci --no-audit --no-fund
+
+      - name: Fetch pinned vendor assets (wllama)
         run: bash scripts/fetch-vendor.sh
 
       - name: Build offline team package
@@ -26,18 +34,19 @@ jobs:
           mkdir -p web/download
           (cd offline && zip -q -r ../web/download/translation-bot-offline.zip .)
 
+      - name: Build dist/ (obfuscated app + minified HTML)
+        run: npm run build
+
       - name: Sanity check
         run: |
-          test -s web/index.html
-          test -s web/_headers
-          test -s web/coi-serviceworker.min.js
-          test -s web/vendor/wllama/index.js
-          test -s web/vendor/wllama/wasm/wllama.wasm
-          test -s web/download/translation-bot-offline.zip
+          test -s dist/index.html
+          test -s dist/vendor/wllama/index.js
+          test -s dist/vendor/wllama/wasm/wllama.wasm
+          test -s dist/download/translation-bot-offline.zip
+          ls dist/a.*.js
+          ! grep -q "Translate the user" dist/a.*.js   # prompts must not ship in clear text
 
-      - name: Deploy (Cloudflare Workers static assets, see wrangler.jsonc)
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          wranglerVersion: "4.151.0"
-          command: deploy
+      - name: Deploy (edge gate worker + static assets, see wrangler.jsonc)
+        run: npx wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

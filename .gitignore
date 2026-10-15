@@ -3,3 +3,7 @@ web/coi-serviceworker.min.js
 web/download/
 *.gguf
 .DS_Store
+node_modules/
+dist/
+.wrangler/
+.dev.vars

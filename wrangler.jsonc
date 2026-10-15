@@ -1,14 +1,22 @@
 {
-  // Static site on Cloudflare Workers (assets only, no Worker script).
+  // Static site on Cloudflare Workers, fronted by an edge gate (worker/index.js)
+  // that blocks bots/scrapers and requires Cloudflare Turnstile before any asset is served.
   // Separate project in Gerald@teeo.space's account — not the uunlock account.
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "translation-bot",
   "account_id": "8b7baeee4189240099917083eaba5d7c",
+  "main": "worker/index.js",
   "compatibility_date": "2026-10-01",
   "workers_dev": true,
   "preview_urls": false,
   "assets": {
-    "directory": "./web",
-    "not_found_handling": "single-page-application"
-  }
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "run_worker_first": true,
+    "not_found_handling": "none"
+  },
+  "vars": {
+    "TURNSTILE_SITEKEY": "0x4AAAAAAFXjetR5vd0_SMpQ"
+  },
+  "observability": { "enabled": true }
 }
