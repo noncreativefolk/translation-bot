@@ -1,4 +1,4 @@
-name: Deploy to GitHub Pages
+name: Deploy to Cloudflare Pages
 
 on:
   push:
@@ -7,15 +7,13 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
-  group: pages
+  group: deploy
   cancel-in-progress: true
 
 jobs:
-  build:
+  deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,30 +21,23 @@ jobs:
       - name: Fetch pinned vendor assets (wllama + coi-serviceworker)
         run: bash scripts/fetch-vendor.sh
 
-      - name: Sanity check
-        run: |
-          test -s web/index.html
-          test -s web/coi-serviceworker.min.js
-          test -s web/vendor/wllama/index.js
-          test -s web/vendor/wllama/wasm/wllama.wasm
-          touch web/.nojekyll
-
       - name: Build offline team package
         run: |
           mkdir -p web/download
           (cd offline && zip -q -r ../web/download/translation-bot-offline.zip .)
 
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: web
+      - name: Sanity check
+        run: |
+          test -s web/index.html
+          test -s web/_headers
+          test -s web/coi-serviceworker.min.js
+          test -s web/vendor/wllama/index.js
+          test -s web/vendor/wllama/wasm/wllama.wasm
+          test -s web/download/translation-bot-offline.zip
 
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Deploy
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy web --project-name=translation-bot --branch=main --commit-dirty=true
