@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KO-EN Translation Bot — Private Team Tool</title>
+<!-- Enables cross-origin isolation on GitHub Pages so the in-browser engine can use multiple CPU threads -->
+<script src="coi-serviceworker.min.js"></script>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='80'>&#xAC00;</text></svg>">
+<style>
+  :root {
+    --bg: #0f1117; --panel: #171a23; --panel2: #1e2230; --line: #2a2f40;
+    --text: #e6e9f0; --dim: #8b93a7; --accent: #6d7cff; --accent2: #4ade80;
+    --danger: #f87171; --warn: #fbbf24;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font: 14px/1.55 "Segoe UI", system-ui, -apple-system, sans-serif; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+  header { display: flex; align-items: center; gap: 12px; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); flex: 0 0 auto; }
+  header h1 { font-size: 15px; font-weight: 600; letter-spacing: .3px; }
+  header .sub { color: var(--dim); font-size: 12px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--dim); flex: 0 0 auto; }
+  .dot.ok { background: var(--accent2); } .dot.bad { background: var(--danger); }
+  .spacer { flex: 1; }
+  .btn { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 12px; font-size: 13px; cursor: pointer; }
+  .btn:hover { border-color: var(--accent); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #0c0e14; font-weight: 600; }
+  .btn.primary:disabled { opacity: .45; cursor: not-allowed; }
+  .btn.small { padding: 3px 8px; font-size: 12px; }
+  .btn.danger { color: var(--danger); }
+  main { display: flex; flex: 1; min-height: 0; }
+  aside { width: 320px; flex: 0 0 auto; background: var(--panel); border-right: 1px solid var(--line); overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 14px; }
+  section h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--dim); margin-bottom: 8px; }
+  .card { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+  .row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .row:last-child { margin-bottom: 0; }
+  select, input[type=text], textarea { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; font-size: 13px; font-family: inherit; }
+  textarea { resize: vertical; }
+  .seg { display: flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  .seg button { flex: 1; background: var(--bg); color: var(--dim); border: 0; padding: 7px 0; font-size: 13px; cursor: pointer; }
+  .seg button.on { background: var(--accent); color: #0c0e14; font-weight: 600; }
+  .mode { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--dim); cursor: pointer; user-select: none; }
+  .gloss-row { display: flex; gap: 6px; align-items: center; padding: 5px 0; border-bottom: 1px dashed var(--line); font-size: 13px; }
+  .gloss-row .src { color: var(--accent); } .gloss-row .arrow { color: var(--dim); padding: 0 4px; }
+  .gloss-row .del { margin-left: auto; }
+  .hint { color: var(--dim); font-size: 12px; }
+  .hidden { display: none !important; }
+  .chatwrap { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  #history { flex: 1; overflow-y: auto; padding: 18px 22px; display: flex; flex-direction: column; gap: 14px; }
+  .msg { max-width: 82%; padding: 10px 14px; border-radius: 10px; white-space: pre-wrap; word-break: break-word; font-size: 14px; }
+  .msg.user { align-self: flex-end; background: var(--accent); color: #0c0e14; border-bottom-right-radius: 2px; }
+  .msg.bot { align-self: flex-start; background: var(--panel2); border: 1px solid var(--line); border-bottom-left-radius: 2px; }
+  .msg.bot.error { border-color: var(--danger); color: var(--danger); }
+  .msg .lbl { display: block; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--dim); margin-bottom: 4px; }
+  .msg .actions { margin-top: 8px; display: flex; gap: 6px; }
+  .src-tag { font-size: 10px; color: var(--dim); align-self: flex-end; margin-top: -8px; }
+  .inputbar { flex: 0 0 auto; border-top: 1px solid var(--line); background: var(--panel); padding: 12px 16px; display: flex; gap: 10px; align-items: flex-end; }
+  .inputbar textarea { flex: 1; min-height: 44px; max-height: 160px; }
+  #progress { flex: 0 0 auto; padding: 8px 16px; background: var(--panel); border-top: 1px solid var(--line); font-size: 12px; color: var(--dim); display: none; align-items: center; gap: 10px; }
+  .bar { flex: 1; height: 6px; background: var(--bg); border-radius: 3px; overflow: hidden; }
+  .bar > div { height: 100%; background: var(--accent); width: 0%; transition: width .2s; }
+  code.kbd { background: var(--panel2); padding: 1px 6px; border-radius: 4px; border: 1px solid var(--line); font-size: 12px; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <span class="dot" id="statusDot" title="server status"></span>
+  <div>
+    <h1>KO-EN Translation Bot</h1>
+    <div class="sub">private team tool · model runs on your device · your text never leaves this computer</div>
+  </div>
+  <div class="spacer"></div>
+  <span class="hint" id="statusText">checking server…</span>
+  <button class="btn small" id="btnBatch">Batch</button>
+  <button class="btn small" id="btnGloss">Glossary (<span id="glossCount">0</span>)</button>
+  <button class="btn small" id="btnSettings">Settings</button>
+</header>
+<main>
+  <aside>
+    <section class="card" id="modelCard">
+      <h2>Engine</h2>
+      <div class="seg" id="engineSeg">
+        <button data-engine="browser" class="on">In browser</button>
+        <button data-engine="server">Local server</button>
+      </div>
+      <div id="browserEngine" style="margin-top:10px">
+        <p class="hint" id="modelInfo">EXAONE 3.5 2.4B (Q4_K_M, ~1.6 GB). Downloaded once from Hugging Face, then cached in this browser.</p>
+        <div class="row" style="margin-top:8px">
+          <button class="btn primary small" id="loadModel">Download &amp; load model</button>
+          <button class="btn small danger hidden" id="clearModel">Clear cache</button>
+        </div>
+        <div class="bar hidden" id="dlBarWrap" style="margin-top:6px"><div id="dlBar"></div></div>
+        <p class="hint" id="engineHint" style="margin-top:6px"></p>
+      </div>
+      <div id="serverEngine" class="hidden" style="margin-top:10px">
+        <p class="hint">Uses llama-server on your machine (faster, supports the 7.8B model). Set the address in Settings.</p>
+      </div>
+    </section>
+    <section class="card">
+      <h2>Direction</h2>
+      <div class="seg" id="dirSeg">
+        <button data-dir="ko2en" class="on">KO → EN</button>
+        <button data-dir="en2ko">EN → KO</button>
+      </div>
+    </section>
+    <section class="card">
+      <h2>Tone</h2>
+      <select id="tone">
+        <option value="">Neutral (default)</option>
+        <option value="formal business">Formal business</option>
+        <option value="legal">Legal / compliance</option>
+        <option value="casual marketing">Casual marketing</option>
+        <option value="technical documentation">Technical documentation</option>
+      </select>
+      <div style="height:8px"></div>
+      <label class="mode"><input type="checkbox" id="roundtrip"> Roundtrip QA (translate + back-translate)</label>
+    </section>
+    <section class="card hidden" id="glossPanel">
+      <h2>Glossary — terms the bot must follow</h2>
+      <div class="row">
+        <input type="text" id="gSrc" placeholder="source term (e.g. wallet)">
+      </div>
+      <div class="row">
+        <input type="text" id="gTgt" placeholder="target term (e.g. 지갑)">
+        <button class="btn small primary" id="gAdd">Add</button>
+      </div>
+      <div id="glossList"></div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn small" id="gExport">Export JSON</button>
+        <button class="btn small" id="gImportBtn">Import JSON</button>
+        <input type="file" id="gImport" accept=".json" class="hidden">
+      </div>
+      <p class="hint" style="margin-top:8px">Share the exported JSON with the team so everyone translates terms identically.</p>
+    </section>
+    <section class="card hidden" id="batchPanel">
+      <h2>Batch translation</h2>
+      <div class="row"><input type="file" id="batchFile" accept=".txt,.md,.csv"></div>
+      <div class="row"><textarea id="batchText" rows="4" placeholder="…or paste lines here, one segment per line"></textarea></div>
+      <div class="row">
+        <button class="btn primary" id="batchStart">Start batch</button>
+        <button class="btn danger small hidden" id="batchCancel">Cancel</button>
+      </div>
+      <div class="row hidden" id="batchDl">
+        <button class="btn small" id="dlTxt">Download .txt</button>
+        <button class="btn small" id="dlJson">Download .json</button>
+      </div>
+      <p class="hint" style="margin-top:8px">Output .txt: original TAB translation per line. Large batches take time — the model processes one segment at a time.</p>
+    </section>
+    <section class="card hidden" id="settingsPanel">
+      <h2>Settings</h2>
+      <div class="row"><input type="text" id="endpoint" placeholder="http://localhost:8080"></div>
+      <div class="row">
+        <button class="btn small" id="saveSettings">Save</button>
+        <button class="btn small" id="checkNow">Check connection</button>
+      </div>
+      <p class="hint" style="margin-top:8px">Local server address (Local server engine only). Start it with <code class="kbd">start-translation-bot.bat</code> / <code class="kbd">.sh</code> from the <a href="download/translation-bot-offline.zip">offline package</a>.</p>
+    </section>
+    <p class="hint">Translation runs on llama.cpp — inside this browser tab, or on your local llama-server. EXAONE 3.5 weights are licensed NON-COMMERCIAL (internal drafting/QA only).</p>
+  </aside>
+  <div class="chatwrap">
+    <div id="history"></div>
+    <div id="progress"><span id="progLabel"></span><div class="bar"><div id="progBar"></div></div><span id="progCount"></span></div>
+    <div class="inputbar">
+      <textarea id="input" placeholder="Type or paste text to translate…  (Ctrl+Enter to send)"></textarea>
+      <button class="btn primary" id="send">Translate</button>
+    </div>
+  </div>
+</main>
+<script type="module">
+import { Wllama, LoggerWithoutDebug } from "./vendor/wllama/index.js";
+
+/* ---------------- in-browser model config ---------------- */
+const MODEL = {
+  repo: "LGAI-EXAONE/EXAONE-3.5-2.4B-Instruct-GGUF",
+  file: "EXAONE-3.5-2.4B-Instruct-Q4_K_M.gguf",
+  label: "EXAONE 3.5 2.4B Q4_K_M",
+};
+MODEL.url = "https://huggingface.co/" + MODEL.repo + "/resolve/main/" + MODEL.file;
+const N_CTX = 4096;
+
+/* ---------------- state ---------------- */
+const LS = { ep: "tb_endpoint", gloss: "tb_glossary", tone: "tb_tone", dir: "tb_dir", engine: "tb_engine" };
+let engine = localStorage.getItem(LS.engine) || "browser";
+let wllama = null;          // Wllama instance once loaded
+let modelLoading = null;    // in-flight load promise
+let endpoint = localStorage.getItem(LS.ep) || "http://localhost:8080";
+let glossary = [];
+try { glossary = JSON.parse(localStorage.getItem(LS.gloss) || "[]"); } catch (e) { glossary = []; }
+let direction = localStorage.getItem(LS.dir) || "ko2en";
+let serverOk = false;
+let busy = false;
+let batchAbort = null;
+
+const $ = (id) => document.getElementById(id);
+const history_ = $("history");
+
+/* ---------------- helpers ---------------- */
+function fallbackCopy(txt, done) {
+  const ta = document.createElement("textarea");
+  ta.value = txt; ta.style.position = "fixed"; ta.style.opacity = "0";
+  document.body.appendChild(ta); ta.select();
+  try { document.execCommand("copy"); done(); } catch (e) { /* ignore */ }
+  document.body.removeChild(ta);
+}
+function saveGlossary() { localStorage.setItem(LS.gloss, JSON.stringify(glossary)); renderGlossary(); }
+function srcName() { return direction === "ko2en" ? "Korean" : "English"; }
+function tgtName() { return direction === "ko2en" ? "English" : "Korean"; }
+
+/* ---------------- in-browser engine (llama.cpp → WebAssembly / WebGPU) ---------------- */
+function setStatus(cls, text) { $("statusDot").className = "dot " + cls; $("statusText").textContent = text; }
+function fmtGB(b) { return (b / 1073741824).toFixed(2) + " GB"; }
+
+function newWllama() {
+  return new Wllama({ default: new URL("./vendor/wllama/wasm/wllama.wasm", import.meta.url).href }, {
+    logger: LoggerWithoutDebug,
+    allowOffline: true,      // reuse cached model when offline
+    parallelDownloads: 3,
+  });
+}
+
+async function isModelCached() {
+  try {
+    const w = newWllama();
+    const models = await w.modelManager.getModels();
+    return models.some(m => m.url === MODEL.url && m.size > 0);
+  } catch (e) { return false; }
+}
+
+async function loadBrowserModel() {
+  if (wllama && wllama.isModelLoaded()) return;
+  if (modelLoading) return modelLoading;
+  modelLoading = (async () => {
+    const btn = $("loadModel"), wrap = $("dlBarWrap"), bar = $("dlBar"), hint = $("engineHint");
+    btn.disabled = true;
+    wrap.classList.remove("hidden");
+    setStatus("", "loading model…");
+    const w = newWllama();
+    const gpu = w.isSupportWebGPU();
+    try {
+      await w.loadModelFromUrl(MODEL.url, {
+        n_ctx: N_CTX,
+        n_gpu_layers: gpu ? 999 : 0,
+        progressCallback: ({ loaded, total }) => {
+          const f = total ? loaded / total : 0;
+          bar.style.width = Math.round(f * 100) + "%";
+          hint.textContent = "Downloading " + fmtGB(loaded) + " / " + fmtGB(total || loaded) + " (one-time)";
+        },
+      });
+      wllama = w;
+      bar.style.width = "100%";
+      const mt = w.isMultithread() ? w.getNumThreads() + " threads" : "single thread";
+      hint.textContent = "Ready · " + (gpu ? "WebGPU" : "CPU (" + mt + ")") + " · cached for next time";
+      btn.textContent = "Model loaded";
+      $("clearModel").classList.remove("hidden");
+      setTimeout(() => wrap.classList.add("hidden"), 800);
+      updateStatus();
+    } catch (e) {
+      try { await w.exit(); } catch (_) {}
+      btn.disabled = false;
+      wrap.classList.add("hidden");
+      hint.textContent = "Load failed: " + (e && e.message ? e.message : e);
+      setStatus("bad", "model failed to load");
+      throw e;
+    } finally {
+      modelLoading = null;
+    }
+  })();
+  return modelLoading;
+}
+
+async function clearModelCache() {
+  if (!confirm("Delete the cached model (~1.6 GB) from this browser? It will re-download next time.")) return;
+  try { if (wllama) await wllama.exit(); } catch (_) {}
+  wllama = null;
+  await newWllama().cacheManager.clear();
+  $("loadModel").disabled = false; $("loadModel").textContent = "Download & load model";
+  $("clearModel").classList.add("hidden");
+  $("engineHint").textContent = "Cache cleared.";
+  updateStatus();
+}
+
+/* ---------------- status ---------------- */
+async function updateStatus() {
+  if (engine === "server") return checkServer();
+  if (wllama && wllama.isModelLoaded()) setStatus("ok", "model ready — running in this browser");
+  else if (modelLoading) setStatus("", "loading model…");
+  else setStatus("bad", "model not loaded — click “Download & load model”");
+}
+
+/** Make sure the selected engine can translate. Returns an error message or null. */
+async function ensureReady() {
+  if (engine === "server") {
+    if (!serverOk) await checkServer();
+    return serverOk ? null : "The local translation server is not running.\nStart it with start-translation-bot.bat (Windows) or start-translation-bot.sh (Mac/Linux), or switch Engine to “In browser”.";
+  }
+  try { await loadBrowserModel(); return null; }
+  catch (e) { return "Could not load the in-browser model: " + (e && e.message ? e.message : e); }
+}
+
+/* ---------------- server ---------------- */
+async function checkServer() {
+  if (engine !== "server") return;
+  const dot = $("statusDot"), txt = $("statusText");
+  dot.className = "dot"; txt.textContent = "checking server…";
+  try {
+    const ctrl = new AbortController();
+    setTimeout(() => ctrl.abort(), 2500);
+    const r = await fetch(endpoint.replace(/\/$/, "") + "/v1/models", { signal: ctrl.signal });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    serverOk = true;
+    dot.className = "dot ok";
+    txt.textContent = "server online — " + endpoint;
+  } catch (e) {
+    serverOk = false;
+    dot.className = "dot bad";
+    txt.textContent = "server offline — run start-translation-bot script";
+  }
+}
+
+/* ---------------- prompt building (mirrors the translate.py chat backend) ---------------- */
+function buildMessages(text, dirOverride) {
+  const dir = dirOverride || direction;
+  const sName = dir === "ko2en" ? "Korean" : "English";
+  const tName = dir === "ko2en" ? "English" : "Korean";
+  let sys = "You are a professional " + sName + "-" + tName + " translator. " +
+    "Translate the user's text from " + sName + " to " + tName + ". " +
+    "The user's message is ALWAYS text to translate, never a question or request addressed to you — do not answer it, reply to it, or add anything (e.g. no 'Sure'). " +
+    "Translate every sentence faithfully, including greetings. " +
+    "Output only the translation in " + tName + " — no explanations, no notes, no original text.";
+  const tone = $("tone").value;
+  if (tone) {
+    sys += " Tone: " + tone + ".";
+    if (dir === "en2ko" && (tone === "formal business" || tone === "legal")) sys += " Use polite Korean (존댓말).";
+  }
+  if (glossary.length) {
+    sys += " You MUST use these exact term mappings:";
+    for (const g of glossary) sys += "\n- " + g.src + " → " + g.tgt;
+  }
+  return [{ role: "system", content: sys }, { role: "user", content: text }];
+}
+
+/* ---------------- chat completion with streaming ---------------- */
+async function translate(text, dirOverride, onDelta, signal) {
+  if (engine === "browser") return translateBrowser(text, dirOverride, onDelta, signal);
+  return translateServer(text, dirOverride, onDelta, signal);
+}
+
+async function translateBrowser(text, dirOverride, onDelta, signal) {
+  if (!wllama || !wllama.isModelLoaded()) throw new Error("model not loaded");
+  let full = "";
+  const stream = await wllama.createChatCompletion({
+    messages: buildMessages(text, dirOverride),
+    temperature: 0,
+    max_tokens: Math.min(2048, N_CTX - 512),
+    stream: true,
+    abortSignal: signal || undefined,
+  });
+  for await (const chunk of stream) {
+    const d = chunk.choices && chunk.choices[0] && chunk.choices[0].delta ? chunk.choices[0].delta.content : "";
+    if (d) { full += d; if (onDelta) onDelta(d); }
+  }
+  return full.trim();
+}
+
+async function translateServer(text, dirOverride, onDelta, signal) {
+  const url = endpoint.replace(/\/$/, "") + "/v1/chat/completions";
+  const body = { messages: buildMessages(text, dirOverride), temperature: 0, stream: true };
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal: signal || null,
+  });
+  if (!res.ok) throw new Error("Server error HTTP " + res.status + ": " + (await res.text()).slice(0, 300));
+
+  /* non-streaming fallback (older servers) */
+  if (!res.body) {
+    const j = await res.json();
+    const t = j.choices && j.choices[0] && j.choices[0].message ? j.choices[0].message.content : "";
+    if (onDelta) onDelta(t);
+    return t;
+  }
+
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "", full = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let i;
+    while ((i = buf.indexOf("\n")) >= 0) {
+      let line = buf.slice(0, i); buf = buf.slice(i + 1);
+      line = line.trim();
+      if (!line.startsWith("data:")) continue;
+      const data = line.slice(5).trim();
+      if (data === "[DONE]") return full;
+      try {
+        const j = JSON.parse(data);
+        const d = j.choices && j.choices[0] && j.choices[0].delta ? j.choices[0].delta.content : "";
+        if (d) { full += d; if (onDelta) onDelta(d); }
+      } catch (e) { /* partial JSON — ignore */ }
+    }
+  }
+  return full;
+}
+
+/* ---------------- UI: messages ---------------- */
+function addMsg(cls) {
+  const d = document.createElement("div");
+  d.className = "msg " + cls;
+  history_.appendChild(d);
+  history_.scrollTop = history_.scrollHeight;
+  return d;
+}
+function addUser(text) {
+  const d = addMsg("user");
+  d.textContent = text;
+}
+function addBotShell(label) {
+  const d = addMsg("bot");
+  if (label) {
+    const l = document.createElement("span");
+    l.className = "lbl"; l.textContent = label;
+    d.appendChild(l);
+  }
+  const body = document.createElement("div");
+  d.appendChild(body);
+  return { root: d, body };
+}
+function addCopyBtn(shell, getText) {
+  const a = document.createElement("div"); a.className = "actions";
+  const b = document.createElement("button"); b.className = "btn small"; b.textContent = "Copy";
+  b.onclick = () => {
+    const done = () => { b.textContent = "Copied"; setTimeout(() => b.textContent = "Copy", 1200); };
+    const txt = getText();
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(txt).then(done).catch(() => fallbackCopy(txt, done));
+    } else {
+      fallbackCopy(txt, done);
+    }
+  };
+  a.appendChild(b); shell.root.appendChild(a);
+}
+
+/* ---------------- send flow ---------------- */
+async function doSend() {
+  const ta = $("input");
+  const text = ta.value.trim();
+  if (!text || busy) return;
+  busy = true; $("send").disabled = true;
+  addUser(text);
+  ta.value = "";
+  const notReady = await ensureReady();
+  if (notReady) {
+    const e = addBotShell("error");
+    e.body.textContent = notReady;
+    e.root.classList.add("error");
+    busy = false; $("send").disabled = false;
+    return;
+  }
+  const rt = $("roundtrip").checked;
+  try {
+    if (!rt) {
+      const sh = addBotShell(srcName() + " → " + tgtName());
+      const full = await translate(text, null, (d) => { sh.body.textContent += d; history_.scrollTop = history_.scrollHeight; });
+      sh.body.textContent = full || "(empty response)";
+      addCopyBtn(sh, () => full);
+    } else {
+      const sh = addBotShell("ROUNDTRIP QA");
+      const fwd = await translate(text, "ko2en", (d) => { sh.body.textContent += d; history_.scrollTop = history_.scrollHeight; });
+      sh.body.textContent = "";
+      const f1 = document.createElement("div"); f1.textContent = "EN: " + (fwd || "(empty)");
+      const f2 = document.createElement("div"); f2.style.marginTop = "6px"; f2.textContent = "KO (back-translation): ";
+      sh.body.appendChild(f1); sh.body.appendChild(f2);
+      let backAcc = "";
+      const back = await translate(fwd, "en2ko", (d) => { backAcc += d; f2.textContent = "KO (back-translation): " + backAcc; });
+      f2.textContent = "KO (back-translation): " + back;
+      const note = document.createElement("div");
+      note.className = "hint"; note.style.marginTop = "6px";
+      note.textContent = "Original vs back-translation divergence flags low-confidence segments — verify manually before use.";
+      sh.body.appendChild(note);
+      addCopyBtn(sh, () => "EN: " + fwd + "\nKO (back): " + back);
+    }
+  } catch (err) {
+    const e = addBotShell("error");
+    e.root.classList.add("error");
+    e.body.textContent = "Translation failed: " + err.message + "\nIf the server was stopped, restart it and retry.";
+  }
+  busy = false; $("send").disabled = false;
+  history_.scrollTop = history_.scrollHeight;
+}
+
+/* ---------------- glossary ---------------- */
+function renderGlossary() {
+  $("glossCount").textContent = glossary.length;
+  const list = $("glossList"); list.textContent = "";
+  glossary.forEach((g, i) => {
+    const r = document.createElement("div"); r.className = "gloss-row";
+    const s = document.createElement("span"); s.className = "src"; s.textContent = g.src;
+    const a = document.createElement("span"); a.className = "arrow"; a.textContent = "→";
+    const t = document.createElement("span"); t.textContent = g.tgt;
+    const del = document.createElement("button"); del.className = "btn small del danger"; del.textContent = "x";
+    del.onclick = () => { glossary.splice(i, 1); saveGlossary(); };
+    r.appendChild(s); r.appendChild(a); r.appendChild(t); r.appendChild(del);
+    list.appendChild(r);
+  });
+  if (!glossary.length) { const p = document.createElement("p"); p.className = "hint"; p.textContent = "No terms yet."; list.appendChild(p); }
+}
+$("gAdd").onclick = () => {
+  const s = $("gSrc").value.trim(), t = $("gTgt").value.trim();
+  if (!s || !t) return;
+  glossary.push({ src: s, tgt: t });
+  $("gSrc").value = ""; $("gTgt").value = "";
+  saveGlossary();
+};
+$("gExport").onclick = () => {
+  const blob = new Blob([JSON.stringify({ version: 1, pairs: glossary }, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = "translation-glossary.json"; a.click();
+  URL.revokeObjectURL(a.href);
+};
+$("gImportBtn").onclick = () => $("gImport").click();
+$("gImport").onchange = (ev) => {
+  const f = ev.target.files[0]; if (!f) return;
+  const r = new FileReader();
+  r.onload = () => {
+    try {
+      const j = JSON.parse(r.result);
+      const pairs = Array.isArray(j) ? j : j.pairs;
+      if (!Array.isArray(pairs)) throw new Error("bad format");
+      glossary = pairs.filter(p => p && p.src && p.tgt).map(p => ({ src: String(p.src), tgt: String(p.tgt) }));
+      saveGlossary();
+    } catch (e) { alert("Import failed: not a valid glossary JSON."); }
+  };
+  r.readAsText(f);
+  ev.target.value = "";
+};
+
+/* ---------------- batch ---------------- */
+let batchResults = [];
+function setProgress(show, label, frac, count) {
+  $("progress").style.display = show ? "flex" : "none";
+  if (label !== undefined) $("progLabel").textContent = label;
+  $("progBar").style.width = Math.round(frac * 100) + "%";
+  if (count !== undefined) $("progCount").textContent = count;
+}
+async function runBatch() {
+  if (busy) return;
+  let lines = [];
+  const f = $("batchFile").files[0];
+  if (f) {
+    const txt = await f.text();
+    lines = txt.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+  } else {
+    lines = $("batchText").value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+  }
+  if (!lines.length) { alert("Nothing to translate — attach a .txt/.md file or paste lines."); return; }
+  const notReady = await ensureReady();
+  if (notReady) { alert(notReady); return; }
+
+  busy = true; batchAbort = new AbortController();
+  $("batchStart").disabled = true; $("batchCancel").classList.remove("hidden");
+  batchResults = [];
+  const dir = direction; /* batch uses the current direction for all lines */
+  for (let i = 0; i < lines.length; i++) {
+    if (batchAbort.signal.aborted) break;
+    setProgress(true, "Translating (" + dir + ")…", i / lines.length, (i + 1) + " / " + lines.length);
+    try {
+      const out = await translate(lines[i], null, null, batchAbort.signal);
+      batchResults.push({ original: lines[i], translation: out });
+    } catch (e) {
+      if (batchAbort.signal.aborted) break;
+      batchResults.push({ original: lines[i], translation: "", error: e.message });
+    }
+  }
+  const done = batchResults.length;
+  setProgress(true, batchAbort.signal.aborted ? "Cancelled." : "Done.", 1, done + " / " + lines.length);
+  $("batchStart").disabled = false; $("batchCancel").classList.add("hidden");
+  $("batchDl").classList.remove("hidden");
+  busy = false;
+}
+$("batchStart").onclick = runBatch;
+$("batchCancel").onclick = () => { if (batchAbort) batchAbort.abort(); };
+$("dlTxt").onclick = () => {
+  const t = batchResults.map(r => r.original + "\t" + (r.translation || ("ERROR: " + (r.error || "")))).join("\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([t], { type: "text/plain" }));
+  a.download = "batch-translation.txt"; a.click(); URL.revokeObjectURL(a.href);
+};
+$("dlJson").onclick = () => {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(batchResults, null, 2)], { type: "application/json" }));
+  a.download = "batch-translation.json"; a.click(); URL.revokeObjectURL(a.href);
+};
+
+/* ---------------- panels / controls ---------------- */
+function toggle(id, btn) { $(id).classList.toggle("hidden"); }
+$("btnGloss").onclick = () => toggle("glossPanel");
+$("btnBatch").onclick = () => toggle("batchPanel");
+$("btnSettings").onclick = () => toggle("settingsPanel");
+$("dirSeg").addEventListener("click", (e) => {
+  if (e.target.dataset.dir) {
+    direction = e.target.dataset.dir;
+    localStorage.setItem(LS.dir, direction);
+    for (const b of $("dirSeg").children) b.className = b.dataset.dir === direction ? "on" : "";
+  }
+});
+$("saveSettings").onclick = () => {
+  endpoint = $("endpoint").value.trim() || "http://localhost:8080";
+  localStorage.setItem(LS.ep, endpoint);
+  checkServer();
+};
+$("checkNow").onclick = checkServer;
+$("send").onclick = doSend;
+$("input").addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") doSend();
+});
+/* ---------------- engine switch ---------------- */
+function applyEngine() {
+  for (const b of $("engineSeg").children) b.className = b.dataset.engine === engine ? "on" : "";
+  $("browserEngine").classList.toggle("hidden", engine !== "browser");
+  $("serverEngine").classList.toggle("hidden", engine !== "server");
+  updateStatus();
+}
+$("engineSeg").addEventListener("click", (e) => {
+  if (!e.target.dataset.engine || busy) return;
+  engine = e.target.dataset.engine;
+  localStorage.setItem(LS.engine, engine);
+  applyEngine();
+});
+$("loadModel").onclick = () => loadBrowserModel().catch(() => {});
+$("clearModel").onclick = clearModelCache;
+
+/* ---------------- init ---------------- */
+$("endpoint").value = endpoint;
+$("tone").value = localStorage.getItem(LS.tone) || "";
+$("tone").addEventListener("change", () => localStorage.setItem(LS.tone, $("tone").value));
+for (const b of $("dirSeg").children) b.className = b.dataset.dir === direction ? "on" : "";
+renderGlossary();
+applyEngine();
+setInterval(() => { if (engine === "server") checkServer(); }, 30000);
+
+/* Auto-load the model on startup if it is already cached (no network download needed). */
+isModelCached().then((cached) => {
+  if (cached) {
+    $("clearModel").classList.remove("hidden");
+    if (engine === "browser") { $("engineHint").textContent = "Model found in browser cache — loading…"; loadBrowserModel().catch(() => {}); }
+  } else if (!navigator.gpu) {
+    $("engineHint").textContent = "Tip: Chrome or Edge with WebGPU is much faster. This browser will use CPU.";
+  }
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,52 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch pinned vendor assets (wllama + coi-serviceworker)
+        run: bash scripts/fetch-vendor.sh
+
+      - name: Sanity check
+        run: |
+          test -s web/index.html
+          test -s web/coi-serviceworker.min.js
+          test -s web/vendor/wllama/index.js
+          test -s web/vendor/wllama/wasm/wllama.wasm
+          touch web/.nojekyll
+
+      - name: Build offline team package
+        run: |
+          mkdir -p web/download
+          (cd offline && zip -q -r ../web/download/translation-bot-offline.zip .)
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
