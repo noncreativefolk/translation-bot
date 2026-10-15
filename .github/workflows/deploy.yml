@@ -1,4 +1,4 @@
-name: Deploy to Cloudflare Pages
+name: Deploy to Cloudflare
 
 on:
   push:
@@ -35,9 +35,8 @@ jobs:
           test -s web/vendor/wllama/wasm/wllama.wasm
           test -s web/download/translation-bot-offline.zip
 
-      - name: Deploy
+      - name: Deploy (Cloudflare Workers static assets, see wrangler.jsonc)
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy web --project-name=translation-bot --branch=main --commit-dirty=true
+          command: deploy
